@@ -102,25 +102,36 @@ void setup() {
 }
 
 void loop() {
-  read_sensors();
-  rx_values_read();
-  PID_calculate();
-  control();
-  tx_telemetry();
+  for (int j = 0; j < 5; j++) {
+    for (int i = 0; i < 20; i++) {
+      read_sensors();
+      rx_values_read();
+      PID_calculate();
+      control();
+    }
+    tx_telemetry();
+  }
+  GPS();
 }
 
 //wysylanie parametrow telemetrii do stacji naziemnej
 void tx_telemetry() {
   Serial3.println(code_telemetry());
   digitalWrite(13, telem);
-  telem != telem;
-  delay(50);
+  telem = !telem;
 }
 
 //kodowanie parametrow telemetrii
 String code_telemetry() {
-  String data = "";
-  return data;
+  String telem_data = "";
+  for (int i = 0; i < 4; i++)
+    telem_data += String(inp[i], 0) + ";";
+  telem_data += String(roll) + ";";
+  telem_data += String(pitch) + ";";
+  telem_data += String(yaw) + ";";
+  telem_data += String(altitude, 0) + ";";
+  telem_data += String(battery_voltage, 2);
+  return telem_data;
 }
 
 //startowa kalibracja czujnikow
@@ -132,13 +143,15 @@ void calibrate_sensors() {
 //odczytywanie wartosci z sensorow
 void read_sensors() {
   imu.getAcceleration(&roll, &pitch, &yaw);
-  //ograniczenie zakrsu wartosci imu
+  //ograniczenie zakresu wartosci imu
   roll = constrain(roll, min_imu, max_imu);
   pitch = constrain(pitch, min_imu, max_imu);
   yaw = constrain(yaw, min_imu, max_imu);
   roll = map(roll, min_imu, max_imu, 0, 180);
   pitch = map(pitch, min_imu, max_imu, 0, 180);
   yaw = map(yaw, min_imu, max_imu, 0, 180);
+  pitch_db = (double)pitch;
+  roll_db = (double)roll;
   if (debugIMU) {
     Serial.print(0); Serial.print("\t");
     Serial.print(180); Serial.print("\t");
@@ -159,7 +172,6 @@ void read_sensors() {
     Serial.println(" deg C");
   }
   measure_voltage();
-  GPS();
 }
 
 //measure battery voltage
@@ -193,7 +205,6 @@ void rx_values_read() {
     Serial.println();
     Serial.println(fly_mode);
   }
-  delay(5);
 }
 
 //obliczenie korekty PID
@@ -207,10 +218,16 @@ void PID_calculate() {
   if (fly_mode == 1) {
     pid_pitch.Compute();
     pid_roll.Compute();
+    calc[0] = inp[0];
+    calc[2] = inp[2];
   }
   //loiter fly-mode
   if (fly_mode == 2) {
-
+    inp[1] = 90;
+    pid_pitch.Compute();
+    pid_roll.Compute();
+    calc[0] = inp[0];
+    calc[2] = inp[2];
   }
   if (!arm)
     calc[2] = 0;
@@ -230,7 +247,6 @@ void control() {
     }
     Serial.println();
   }
-  delay(5);
 }
 
 //odczyt danych z GPSu
@@ -256,7 +272,6 @@ void GPS() {
       Serial.println(nmea.getNumSatellites());
     }
   }
-  delay(200);
 }
 
 void SFE_UBLOX_GPS::processNMEA(char incoming)
