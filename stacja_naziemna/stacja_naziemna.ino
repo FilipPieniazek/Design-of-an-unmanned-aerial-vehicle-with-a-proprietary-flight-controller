@@ -1,8 +1,8 @@
 #include <Arduino.h>
 
-bool telem = true;
+bool telem = false;
 String income_data = "";
-String param[] = {"ch1: ", "ch2: ", "ch3: ", "ch4: ", "roll: ", "pitch: ", "yaw: ", "altitude: ", "bat_volt: "};
+char input;
 
 void setup()
 {
@@ -16,25 +16,28 @@ void setup()
 void loop()
 {
   decode_telemetry();
+  check_serial();
 }
 
 
 void decode_telemetry() {
-
-  int i = 0;
+  income_data = "";
   if (Serial2.available() > 0) {
-    Serial.print(param[i]);
-    i++;
     while (Serial2.available() > 0) {
       char temp = Serial2.read();
-      if (temp == ';') {
-        Serial.print(param[i]);
-        i++;
-      }
-      else
-        Serial.write(temp);
+      income_data += temp;
+      telem = !telem;
     }
-    telem = !telem;
+    Serial.println(income_data);
+    digitalWrite(13, telem);
   }
-  digitalWrite(13, telem);
+}
+
+void check_serial(){
+  if(Serial.available() > 0) {
+    input = Serial.read();
+    Serial2.write(input);
+    digitalWrite(13,HIGH);
+  }
+  digitalWrite(13,LOW);
 }

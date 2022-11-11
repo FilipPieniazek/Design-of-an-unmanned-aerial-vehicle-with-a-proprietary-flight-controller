@@ -1,3 +1,4 @@
+//biblioteki
 #include "PWM.hpp"
 #include "Wire.h"
 #include <Arduino.h>
@@ -6,7 +7,6 @@
 #include "I2Cdev.h"
 #include "MPU6050.h"
 #include "SparkFun_Ublox_Arduino_Library.h"
-#include <MicroNMEA.h>
 #include <PID_v1.h>
 
 
@@ -17,6 +17,7 @@ bool debugIN = false;
 bool debugOUT = false;
 bool debugGPS = false;
 bool debugTELEM = false;
+bool debugPID = true;
 
 //definicja kanalow PWM odbiornika
 PWM ch1(12);
@@ -37,10 +38,15 @@ double calc[5] = {0, 0, 0, 0, 0};
 
 //definicja niezbednych zmiennych
 int fly_mode = 0;//0-manual, 1-stabilize, 2-loiter
+bool transmit = true;
 bool arm = false;
 float battery_voltage = 0;
 float r1 = 10000;
 float r2 = 100000;
+long lastTime = 0;
+String income_data = "";
+String option = "";
+String parameter = "";
 
 //inicjalizacja IMU
 MPU6050 imu;
@@ -61,10 +67,9 @@ float pressure, altitude, temperature, altitude_offset;
 
 //inicjalizacja GPSa
 SFE_UBLOX_GPS gps;
-char nmeaBuffer[100];
-MicroNMEA nmea(nmeaBuffer, sizeof(nmeaBuffer));
-long latitude_mdeg = 0;
-long longitude_mdeg = 0;
+long latitude = 0;
+long longitude = 0;
+long altitude_gps = 0;
 
 //telemetria podpieta do Serial3
 bool telem = true;
@@ -109,29 +114,99 @@ void loop() {
       PID_calculate();
       control();
     }
-    tx_telemetry();
+    if (transmit)
+      tx_telemetry();
+    else
+      rx_telemetry();
   }
   GPS();
 }
 
+//odczytywanie parametrow telemetrii ze stacji naziemnej
+void rx_telemetry() {
+  income_data = "";
+  if (Serial3.available() > 0) {
+    while (Serial3.available() > 0) {
+      char temp = Serial3.read();
+      income_data += temp;
+    }
+  }
+  decode_telemetry();
+}
+
+//dekodowanie telemetrii i zmiana parametrow
+void decode_telemetry() {
+  option = "";
+  parameter = "";
+  for (int i = 0; i < 3; i++)
+    option += income_data[i];
+  for (int i = 3; i < income_data.length(); i++)
+    parameter += income_data[i];
+  double data = parameter.toFloat();
+  if (option == "kpp")
+    kp_pitch = data;
+  else if (option == "kip")
+    ki_pitch = data;
+  else if (option == "kdp")
+    kd_pitch = data;
+  else if (option == "kpr")
+    kp_roll = data;
+  else if (option == "kir")
+    ki_roll = data;
+  else if (option == "kdr")
+    kd_roll = data;
+}
+
 //wysylanie parametrow telemetrii do stacji naziemnej
 void tx_telemetry() {
-  Serial3.println(code_telemetry());
+  Serial3.println(send_data());
+  Serial3.println(send_gps());
+  Serial3.println(send_imu());
+  if (debugPID)
+    Serial3.println(send_pid());
   digitalWrite(13, telem);
   telem = !telem;
 }
 
 //kodowanie parametrow telemetrii
-String code_telemetry() {
-  String telem_data = "";
-  for (int i = 0; i < 4; i++)
-    telem_data += String(inp[i], 0) + ";";
-  telem_data += String(roll) + ";";
-  telem_data += String(pitch) + ";";
-  telem_data += String(yaw) + ";";
-  telem_data += String(altitude, 0) + ";";
-  telem_data += String(battery_voltage, 2);
+String send_data() {
+  String telem_data = ";";
+  telem_data += String(inp[0], 0) + ";";
+  telem_data += String(inp[1], 0) + ";";
+  telem_data += String(inp[2], 0) + ";";
+  telem_data += String(inp[3], 0);
   return telem_data;
+}
+
+//wysylanie pozycji samolotu
+String send_imu() {
+  String telem_imu = ":";
+  telem_imu += String(roll) + ":";
+  telem_imu += String(pitch) + ":";
+  telem_imu += String(yaw) + ":";
+  telem_imu += String(battery_voltage, 2);
+  return telem_imu;
+}
+
+//wysylanie lokalizacji GPS
+String send_gps() {
+  String telem_gps = "_";
+  telem_gps += String(latitude) + "_";
+  telem_gps += String(longitude) + "_";
+  telem_gps += String(altitude_gps);
+  return telem_gps;
+}
+
+//wysylanie wspolczynnikow PID
+String send_pid() {
+  String telem_pid = ";";
+  telem_pid += String(kp_pitch) + ";";
+  telem_pid += String(ki_pitch) + ";";
+  telem_pid += String(kd_pitch) + ";";
+  telem_pid += String(kp_roll) + ";";
+  telem_pid += String(ki_roll) + ";";
+  telem_pid += String(kd_roll);
+  return telem_pid;
 }
 
 //startowa kalibracja czujnikow
@@ -187,16 +262,22 @@ void rx_values_read() {
   inp[3] = map(ch4.getValue(), _min[3], _max[3], 0, 180);
   inp[4] = map(ch5.getValue(), _min[4], _max[4], 0, 180);
   inp[5] = ch6.getValue();
-  if (inp[5] < 1200)
+  if (inp[5] < 1200) {
     fly_mode = 0;
-  else if (inp[5] < 1800)
+    transmit = true;
+  }
+  else if ((inp[5] >= 1200) && (inp[5] < 1400)) {
+    fly_mode = 0;
+    transmit = false;
+  }
+  else if ((inp[5] >= 1400) && (inp[5] < 1800)) {
     fly_mode = 1;
-  else
+    transmit = true;
+  }
+  else {
     fly_mode = 2;
-  if (inp[4] > 1500)
-    arm = true;
-  else
-    arm = false;
+    transmit = true;
+  }
   if (debugIN) {
     for (int i = 0; i < 6; i++) {
       Serial.print(inp[i]);
@@ -251,30 +332,19 @@ void control() {
 
 //odczyt danych z GPSu
 void GPS() {
-  gps.checkUblox();
-
-  if (nmea.isValid() == true)
+  if (millis() - lastTime > 1000)
   {
-    latitude_mdeg = nmea.getLatitude();
-    longitude_mdeg = nmea.getLongitude();
+    lastTime = millis();
+    latitude = gps.getLatitude();
+    longitude = gps.getLongitude();
+    altitude_gps = gps.getAltitude();
     if (debugGPS) {
-      Serial.print("Latitude (deg): ");
-      Serial.println(latitude_mdeg / 1000000., 6);
-      Serial.print("Longitude (deg): ");
-      Serial.println(longitude_mdeg / 1000000., 6);
+      Serial.print("Latitude: ");
+      Serial.println(latitude);
+      Serial.print("Longitude: ");
+      Serial.println(longitude);
+      Serial.print("Altitude: ");
+      Serial.println(altitude_gps);
     }
   }
-  else
-  {
-    if (debugGPS) {
-      Serial.print("No Fix - ");
-      Serial.print("Num. satellites: ");
-      Serial.println(nmea.getNumSatellites());
-    }
-  }
-}
-
-void SFE_UBLOX_GPS::processNMEA(char incoming)
-{
-  nmea.process(incoming);
 }
