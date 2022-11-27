@@ -1,22 +1,36 @@
 #include <Arduino.h>
+#include "BluetoothSerial.h"
 
-bool telem = false;
+#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
+#error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
+#endif
+
+bool telem = true;
 String income_data = "";
 char input;
+
+BluetoothSerial SerialBT;
 
 void setup()
 {
   // Otwarcie portu do komunikacji
   Serial.begin(38400);
   Serial2.begin(38400);
-  pinMode(13, OUTPUT);
-  digitalWrite(13, telem);
+  SerialBT.begin("UAV_BT");
+  Serial.println("BT uruchomiony");
+  pinMode(2, OUTPUT);
+  while (1) {
+    if (SerialBT.connected()) {
+      digitalWrite(2, HIGH);
+      break;
+    }
+  }
 }
 
 void loop()
 {
   decode_telemetry();
-  check_serial();
+  check_data_from_app();
 }
 
 
@@ -28,16 +42,16 @@ void decode_telemetry() {
       income_data += temp;
       telem = !telem;
     }
-    Serial.println(income_data);
-    digitalWrite(13, telem);
+    SerialBT.println(income_data);
+    digitalWrite(2, telem);
   }
 }
 
-void check_serial(){
-  if(Serial.available() > 0) {
-    input = Serial.read();
+void check_data_from_app() {
+  if (SerialBT.available() > 0) {
+    input = SerialBT.read();
     Serial2.write(input);
-    digitalWrite(13,HIGH);
+    digitalWrite(2, HIGH);
   }
-  digitalWrite(13,LOW);
+  digitalWrite(2, LOW);
 }

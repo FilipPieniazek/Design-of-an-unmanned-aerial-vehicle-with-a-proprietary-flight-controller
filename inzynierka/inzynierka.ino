@@ -16,7 +16,7 @@ bool debugIN = false;
 bool debugOUT = false;
 bool debugGPS = false;
 bool debugTELEM = false;
-bool debugPID = false;
+bool debugPID = true;
 
 //definicja kanalow PWM odbiornika
 PWM ch1(12);
@@ -37,11 +37,10 @@ double calc[5] = {0, 0, 0, 0, 0};
 
 //definicja niezbednych zmiennych
 int fly_mode = 0;//0-manual, 1-stabilize, 2-loiter
+int last_fly_mode = 0;
+int buzzer = 22;
 bool transmit = true;
 bool arm = true;
-float battery_voltage = 0;
-float r1 = 10000;
-float r2 = 100000;
 long lastTime = 0;
 String income_data = "";
 String option = "";
@@ -86,6 +85,7 @@ void setup() {
   Serial3.begin(38400);
   Serial.begin(115200);
   pinMode(13, OUTPUT);
+  pinMode(buzzer, OUTPUT);
   digitalWrite(13, telem);
   ch1.begin(true);
   ch2.begin(true);
@@ -106,19 +106,22 @@ void setup() {
 }
 
 void loop() {
-  for (int j = 0; j < 5; j++) {
-    for (int i = 0; i < 20; i++) {
-      read_sensors();
-      rx_values_read();
-      PID_calculate();
-      control();
+  for (int k = 0; k < 3; k++) {
+    for (int j = 0; j < 5; j++) {
+      for (int i = 0; i < 20; i++) {
+        read_sensors();
+        rx_values_read();
+        PID_calculate();
+        control();
+      }
+      if (transmit)
+        tx_telemetry();
+      else
+        rx_telemetry();
     }
-    if (transmit)
-      tx_telemetry();
-    else
-      rx_telemetry();
+    GPS();
   }
-  GPS();
+  digitalWrite(buzzer, LOW);
 }
 
 //odczytywanie wartosci PWM z odbiornika RC
@@ -130,7 +133,10 @@ void rx_values_read() {
   inp[4] = map(ch5.getValue(), _min[4], _max[4], 0, 180);
   inp[5] = ch6.getValue();
   if (inp[5] < 1200) {
+    if (last_fly_mode > 0)
+      digitalWrite(buzzer, HIGH);
     fly_mode = 0;
+    last_fly_mode = 0;
     transmit = true;
   }
   else if ((inp[5] >= 1200) && (inp[5] < 1400)) {
@@ -138,11 +144,17 @@ void rx_values_read() {
     transmit = false;
   }
   else if ((inp[5] >= 1400) && (inp[5] < 1800)) {
+    if (last_fly_mode != 1)
+      digitalWrite(buzzer, HIGH);
     fly_mode = 1;
+    last_fly_mode = 1;
     transmit = true;
   }
   else {
+    if (last_fly_mode != 2)
+      digitalWrite(buzzer, HIGH);
     fly_mode = 2;
+    last_fly_mode = 2;
     transmit = true;
   }
   if (debugIN) {
@@ -259,12 +271,6 @@ void read_sensors() {
     Serial.print(temperature);
     Serial.println(" deg C");
   }
-  measure_voltage();
-}
-
-//measure battery voltage
-void measure_voltage() {
-  battery_voltage = ((analogRead(A0) * 5) / 1024) / (r2 / (r1 + r2));
 }
 
 
@@ -343,7 +349,6 @@ String send_imu() {
   telem_imu += String(roll) + ":";
   telem_imu += String(pitch) + ":";
   telem_imu += String(yaw) + ":";
-  telem_imu += String(battery_voltage, 2);
   return telem_imu;
 }
 
