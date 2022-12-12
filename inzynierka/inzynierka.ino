@@ -15,8 +15,7 @@ bool debugIMU = false;
 bool debugIN = false;
 bool debugOUT = false;
 bool debugGPS = false;
-bool debugTELEM = false;
-bool debugPID = true;
+bool debugPID = false;
 
 //definicja kanalow PWM odbiornika
 PWM ch1(12);
@@ -39,6 +38,7 @@ double calc[5] = {0, 0, 0, 0, 0};
 int fly_mode = 0;//0-manual, 1-stabilize, 2-loiter
 int last_fly_mode = 0;
 int buzzer = 22;
+int rx_indicator = 23;
 bool transmit = true;
 bool arm = true;
 long lastTime = 0;
@@ -73,6 +73,7 @@ long altitude_gps = 0;
 bool telem = true;
 
 void setup() {
+  delay(3000);
   Wire.begin();
   if (gps.begin() == false)
   {
@@ -86,6 +87,7 @@ void setup() {
   Serial.begin(115200);
   pinMode(13, OUTPUT);
   pinMode(buzzer, OUTPUT);
+  pinMode(rx_indicator, INPUT);
   digitalWrite(13, telem);
   ch1.begin(true);
   ch2.begin(true);
@@ -105,6 +107,7 @@ void setup() {
   calibrate_sensors();
 }
 
+//glowna petla programu
 void loop() {
   for (int k = 0; k < 3; k++) {
     for (int j = 0; j < 5; j++) {
@@ -113,6 +116,7 @@ void loop() {
         rx_values_read();
         PID_calculate();
         control();
+        //check_range();
       }
       if (transmit)
         tx_telemetry();
@@ -128,7 +132,7 @@ void loop() {
 void rx_values_read() {
   inp[0] = map(ch1.getValue(), _min[0], _max[0], 0, 180);
   inp[1] = map(ch2.getValue(), _min[1], _max[1], 0, 180);
-  inp[2] = map(ch3.getValue(), _min[2], _max[2], 0, 180);
+  inp[2] = ch3.getValue();
   inp[3] = map(ch4.getValue(), _min[3], _max[3], 0, 180);
   inp[4] = map(ch5.getValue(), _min[4], _max[4], 0, 180);
   inp[5] = ch6.getValue();
@@ -156,13 +160,6 @@ void rx_values_read() {
     fly_mode = 2;
     last_fly_mode = 2;
     transmit = true;
-  }
-  if (debugIN) {
-    for (int i = 0; i < 6; i++) {
-      Serial.print(inp[i]);
-      Serial.print(";");
-    }
-    Serial.println();
   }
 }
 
@@ -204,18 +201,19 @@ void control() {
   out3.write(calc[2]);
   out4.write(calc[3]);
   out5.write(calc[4]);
-  if (debugOUT) {
-    for (int i = 1; i < 2; i++) {
-      Serial.print(calc[i]);
-      Serial.print(";");
-    }
-    Serial.println();
-  }
 }
 
 
 ////////////////////////////////////////////////////////////////////////////czujniki////////////////////////////////////////////////////////////////////////////
 
+//sprawdzenie czy aparatura ma polaczenie z samolotem
+void check_range() {
+  float rx_voltage = analogRead(rx_indicator);
+  if (rx_voltage > 800)
+    digitalWrite(buzzer, HIGH);
+  else
+    digitalWrite(buzzer, LOW);
+}
 
 //odczyt danych z GPSu
 void GPS() {
@@ -225,14 +223,6 @@ void GPS() {
     latitude = gps.getLatitude();
     longitude = gps.getLongitude();
     altitude_gps = gps.getAltitude();
-    if (debugGPS) {
-      Serial.print("Latitude: ");
-      Serial.println(latitude);
-      Serial.print("Longitude: ");
-      Serial.println(longitude);
-      Serial.print("Altitude: ");
-      Serial.println(altitude_gps);
-    }
   }
 }
 
@@ -249,28 +239,14 @@ void read_sensors() {
   roll = constrain(roll, min_imu, max_imu);
   pitch = constrain(pitch, min_imu, max_imu);
   yaw = constrain(yaw, min_imu, max_imu);
-  roll = map(roll, min_imu, max_imu, 180, 0);
-  pitch = map(pitch, min_imu, max_imu, 0, 180);
+  roll = map(roll, min_imu, max_imu, 0, 180);
+  pitch = map(pitch, min_imu, max_imu, 180, 0);
   yaw = map(yaw, min_imu, max_imu, 0, 180);
   pitch_db = (double)pitch;
   roll_db = (double)roll;
-  if (debugIMU) {
-    Serial.print(pitch); Serial.print("\t");
-    Serial.print(roll); Serial.print("\t");
-    Serial.print(yaw); Serial.println("\t");
-  }
   pressure = barometr.readPressureMillibars();
   altitude = barometr.pressureToAltitudeMeters(pressure) - altitude_offset;
   temperature = barometr.readTemperatureC();
-  if (debugBAR) {
-    Serial.print("p: ");
-    Serial.print(pressure);
-    Serial.print(" mbar\ta: ");
-    Serial.print(altitude);
-    Serial.print(" m\tt: ");
-    Serial.print(temperature);
-    Serial.println(" deg C");
-  }
 }
 
 
@@ -311,36 +287,72 @@ void decode_telemetry() {
       ki_roll = data;
     else if (option == "kdr")
       kd_roll = data;
+    else if (option == "tel") {
+      if (data == 1)
+        debugBAR = true;
+      else if (data == 2)
+        debugBAR = false;
+      else if (data == 3)
+        debugIMU = true;
+      else if (data == 4)
+        debugIMU = false;
+      else if (data == 5)
+        debugIN = true;
+      else if (data == 6)
+        debugIN = false;
+      else if (data == 7)
+        debugOUT = true;
+      else if (data == 8)
+        debugOUT = false;
+      else if (data == 9)
+        debugGPS = true;
+      else if (data == 10)
+        debugGPS = false;
+      else if (data == 11)
+        debugPID = true;
+      else if (data == 12)
+        debugPID = false;
+    }
     send_ack();
   }
 }
 
 //wysylanie parametrow telemetrii do stacji naziemnej
 void tx_telemetry() {
-
-
-  Serial3.println(send_data());
-  Serial3.println(send_gps());
-  Serial3.println(send_imu());
+  if (debugOUT)
+    Serial3.println(send_output());
+  if (debugIN)
+    Serial3.println(send_input());
+  if (debugGPS)
+    Serial3.println(send_gps());
+  if (debugIMU)
+    Serial3.println(send_imu());
   if (debugPID)
     Serial3.println(send_pid());
+  if (debugBAR)
+    Serial3.println(send_bar());
   digitalWrite(13, telem);
   telem = !telem;
 }
 
-//kodowanie parametrow telemetrii
-String send_data() {
-  String telem_data = ";";
-  telem_data += String(inp[0], 0) + ";";
-  telem_data += String(inp[1], 0) + ";";
-  telem_data += String(inp[2], 0) + ";";
-  telem_data += String(inp[3], 0);
-  return telem_data;
+//wysylanie sygnalow wejsciowych
+String send_input() {
+  String telem_in = "/";
+  telem_in += String(inp[0], 0) + "/";
+  telem_in += String(inp[1], 0) + "/";
+  telem_in += String(inp[2], 0) + "/";
+  telem_in += String(inp[3], 0);
+  return telem_in;
 }
 
-//wysylanie potwierdzenia zmiany parametrow
-void send_ack() {
-  Serial3.println("ACK");
+//wysylanie sygnalow wyjsciowych
+String send_output() {
+  String telem_out = "/";
+  telem_out += String(calc[0], 0) + "/";
+  telem_out += String(calc[1], 0) + "/";
+  telem_out += String(calc[2], 0) + "/";
+  telem_out += String(calc[3], 0);
+  return telem_out;
 }
 
 //wysylanie pozycji samolotu
@@ -371,4 +383,17 @@ String send_pid() {
   telem_pid += String(ki_roll) + ";";
   telem_pid += String(kd_roll);
   return telem_pid;
+}
+
+//wysylanie danych z barometru
+String send_bar() {
+  String telem_bar = "-";
+  telem_bar += String(altitude) + " ";
+  telem_bar += String(temperature);
+  return telem_bar;
+}
+
+//wysylanie potwierdzenia zmiany parametrow
+void send_ack() {
+  Serial3.println("ACK");
 }
