@@ -33,7 +33,7 @@ void loop()
   check_data_from_app();
 }
 
-
+//odbieranie danych telemetrycznych z kontrolera i przesylanie ich do aplikacji
 void decode_telemetry() {
   income_data = "";
   if (Serial2.available() > 0) {
@@ -47,6 +47,7 @@ void decode_telemetry() {
   }
 }
 
+//odbieranie danych z aplikacji i wysylanie ich do kontrolera
 void check_data_from_app() {
   if (SerialBT.available() > 0) {
     input = SerialBT.read();

@@ -8,6 +8,7 @@
 #include "MPU6050.h"
 #include "SparkFun_Ublox_Arduino_Library.h"
 #include <PID_v1.h>
+#include "math.h"
 
 //debugger
 bool debugBAR = false;
@@ -37,10 +38,12 @@ double calc[5] = {0, 0, 0, 0, 0};
 //definicja niezbednych zmiennych
 int fly_mode = 0;//0-manual, 1-stabilize, 2-loiter
 int last_fly_mode = 0;
+int gps_counter = 0;
 int buzzer = 22;
 int rx_indicator = 23;
 bool transmit = true;
-bool arm = true;
+bool failsafe = false;
+long failsafe_counter = 0;
 long lastTime = 0;
 String income_data = "";
 String option = "";
@@ -67,6 +70,11 @@ float pressure, altitude, temperature, altitude_offset;
 SFE_UBLOX_GPS gps;
 long latitude = 0;
 long longitude = 0;
+long start_latitude = 0;
+long start_longitude = 0;
+long north_latitude = 0;
+long north_longitude = 0;
+bool started = false;
 long altitude_gps = 0;
 
 //telemetria podpieta do Serial3
@@ -116,8 +124,8 @@ void loop() {
         rx_values_read();
         PID_calculate();
         control();
-        //check_range();
       }
+      check_range();
       if (transmit)
         tx_telemetry();
       else
@@ -136,30 +144,32 @@ void rx_values_read() {
   inp[3] = map(ch4.getValue(), _min[3], _max[3], 0, 180);
   inp[4] = map(ch5.getValue(), _min[4], _max[4], 0, 180);
   inp[5] = ch6.getValue();
-  if (inp[5] < 1200) {
-    if (last_fly_mode > 0)
-      digitalWrite(buzzer, HIGH);
-    fly_mode = 0;
-    last_fly_mode = 0;
-    transmit = true;
-  }
-  else if ((inp[5] >= 1200) && (inp[5] < 1400)) {
-    fly_mode = 0;
-    transmit = false;
-  }
-  else if ((inp[5] >= 1400) && (inp[5] < 1800)) {
-    if (last_fly_mode != 1)
-      digitalWrite(buzzer, HIGH);
-    fly_mode = 1;
-    last_fly_mode = 1;
-    transmit = true;
-  }
-  else {
-    if (last_fly_mode != 2)
-      digitalWrite(buzzer, HIGH);
-    fly_mode = 2;
-    last_fly_mode = 2;
-    transmit = true;
+  if (failsafe_counter == 0) {
+    if (inp[5] < 1200) {
+      if (last_fly_mode > 0)
+        digitalWrite(buzzer, HIGH);
+      fly_mode = 0;
+      last_fly_mode = 0;
+      transmit = true;
+    }
+    else if ((inp[5] >= 1200) && (inp[5] < 1400)) {
+      fly_mode = 0;
+      transmit = false;
+    }
+    else if ((inp[5] >= 1400) && (inp[5] < 1800)) {
+      if (last_fly_mode != 1)
+        digitalWrite(buzzer, HIGH);
+      fly_mode = 1;
+      last_fly_mode = 1;
+      transmit = true;
+    }
+    else {
+      if (last_fly_mode != 2)
+        digitalWrite(buzzer, HIGH);
+      fly_mode = 2;
+      last_fly_mode = 2;
+      transmit = true;
+    }
   }
 }
 
@@ -190,8 +200,45 @@ void PID_calculate() {
     calc[3] = inp[3];
     calc[4] = calc[0];
   }
-  if (!arm)
-    calc[2] = 0;
+  //failsafe fly-mode
+  if (fly_mode == 3) {
+    //jesli wysokosc mniejsza niz 120m wznoszenie
+    if (altitude < 120)
+      inp[1] = 110;
+    else
+      inp[1] = 90;
+    //jesli punkt startowy jest po lewej to skreca w lewo
+    if (yaw > calc_failsafe())
+      inp[0] = 110;
+    //jesli punkt startowy jest po prawej to skreca w prawo
+    else
+      inp[0] = 70;
+    pid_roll.Compute();
+    pid_pitch.Compute();
+    calc[2] = 90;
+    calc[3] = inp[3];
+    calc[4] = calc[0];
+  }
+}
+
+//obliczanie azymutu powrotnego
+double calc_failsafe() {
+  failsafe = true;
+  float vec1x = longitude - start_longitude;
+  float vec1y = latitude - start_latitude;
+  float vec2x = north_longitude - start_longitude;
+  float vec2y = north_latitude - start_latitude;
+  float pi = 3.14159;
+
+  float result = acos((vec1x * vec2x + vec1y * vec2y) / sqrt(vec1x * vec1x + vec1y * vec1y) / sqrt(vec2x * vec2x + vec2y * vec2y));
+  
+  if (vec1x * vec2y - vec1y * vec2x < 0) {
+    result *= -1;
+  }
+  result = floor((result * (180 / pi)) / 2);
+  if (result < 0)
+    result += 180;
+  return result;
 }
 
 //wysylanie sterowania na silnik i serwa
@@ -209,10 +256,27 @@ void control() {
 //sprawdzenie czy aparatura ma polaczenie z samolotem
 void check_range() {
   float rx_voltage = analogRead(rx_indicator);
-  if (rx_voltage > 800)
-    digitalWrite(buzzer, HIGH);
-  else
-    digitalWrite(buzzer, LOW);
+  if (rx_voltage > 800) {
+    failsafe_counter = 50;
+    failsafe_counter++;
+    fly_mode = 3;
+    Serial.println(failsafe_counter);
+    if (failsafe_counter > 200)
+      failsafe_counter = 0;
+  }
+  else if (rx_voltage < 800 && failsafe_counter != 0)
+    failsafe_counter--;
+  if (failsafe_counter < 0)
+    failsafe_counter = 0;
+}
+
+//sprawdzenie czy samolot wystartowal i zapisanie pozycji poczatkowej
+void check_start() {
+  if (altitude > 10) {
+    started = true;
+    start_longitude = longitude;
+    start_latitude = latitude;
+  }
 }
 
 //odczyt danych z GPSu
@@ -246,6 +310,8 @@ void read_sensors() {
   roll_db = (double)roll;
   pressure = barometr.readPressureMillibars();
   altitude = barometr.pressureToAltitudeMeters(pressure) - altitude_offset;
+  if (!started)
+    check_start();
   temperature = barometr.readTemperatureC();
 }
 
@@ -319,6 +385,10 @@ void decode_telemetry() {
 
 //wysylanie parametrow telemetrii do stacji naziemnej
 void tx_telemetry() {
+  if (gps_counter == 20) {
+    Serial3.println(send_last_position());
+    gps_counter = 0;
+  }
   if (debugOUT)
     Serial3.println(send_output());
   if (debugIN)
@@ -333,6 +403,15 @@ void tx_telemetry() {
     Serial3.println(send_bar());
   digitalWrite(13, telem);
   telem = !telem;
+  gps_counter++;
+}
+
+//wysylanie ostatniej pozycji samolotu
+String send_last_position() {
+  String telem_last_gps = "lat ";
+  telem_last_gps += String(latitude) + " lon ";
+  telem_last_gps += String(longitude) + "#";
+  return telem_last_gps;
 }
 
 //wysylanie sygnalow wejsciowych
